@@ -73,23 +73,29 @@ is_reflector() {
     fi
 }
 
-# Verificaciones iniciales
+# Initial checks
 initial_checks() {
     : > "$ERROR_LOG" 2>/dev/null
 
-    # Verificar usuario root
+    # Check sudo availability
+    if ! command -v sudo >/dev/null 2>&1; then
+        log_error "sudo is not installed. Please install and configure sudo."
+        exit 1
+    fi
+
+    # Check root user
     if [ "$(id -u)" = 0 ]; then
         log_error "This script MUST NOT be run as root user."
         exit 1
     fi
 
-    # Verificar directorio HOME
+    # Check HOME directory
     if [ "$PWD" != "$HOME" ]; then
         log_error "The script must be executed from HOME directory."
         exit 1
     fi
 
-    # Verificar conexión a internet
+    # Check internet connection
     if ! ping -q -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then
         log_error "No internet connection detected."
         exit 1
@@ -778,31 +784,48 @@ configure_services() {
     picom_config="$HOME/.config/bspwm/src/config/picom.conf"
     sleep 1
 
-    # MPD: session-based autostart (works regardless of init system)
-    if pgrep -x mpd >/dev/null 2>&1; then
-        printf "%b\n" "${BLD}${CYE}Stopping running mpd instance...${CNC}"
-        pkill -TERM -x mpd || true
-        sleep 1
+    # MPD: s6 user service setup
+    printf "%b\n" "${BLD}${CYE}Configuring MPD for s6 user services...${CNC}"
+    
+    # Create s6 user service directory
+    mkdir -p "$HOME/.local/service/mpd" 2>/dev/null || true
+    
+    # Create run script
+    cat > "$HOME/.local/service/mpd/run" << 'EOF'
+#!/bin/sh
+exec mpd --no-daemon
+EOF
+    chmod +x "$HOME/.local/service/mpd/run"
+    
+    # Create finish script (optional but recommended)
+    cat > "$HOME/.local/service/mpd/finish" << 'EOF'
+#!/bin/sh
+exec pkill -TERM mpd
+EOF
+    chmod +x "$HOME/.local/service/mpd/finish"
+    
+    printf "%b\n" "${BLD}${CGR}MPD s6 user service created at ${CBL}$HOME/.local/service/mpd/${CNC}"
+
+    # Enable the service by linking it
+    if [ -d "$HOME/.local/service/mpd" ]; then
+        mkdir -p "$HOME/.s6/sv" 2>/dev/null || true
+        ln -sf "$HOME/.local/service/mpd" "$HOME/.s6/sv/" 2>/dev/null || true
+        printf "%b\n" "${BLD}${CGR}MPD service linked to s6 supervision tree${CNC}"
     fi
-    mkdir -p "$HOME/.config/mpd" >/dev/null 2>&1
+
+    # Add to bspwmrc for autostart
     bspwmrc="$HOME/.config/bspwm/bspwmrc"
     if [ -f "$bspwmrc" ]; then
-        if ! grep -q '^[^#]*mpd --no-daemon' "$bspwmrc"; then
-            printf "%b\n" "${BLD}${CYE}Adding mpd autostart to bspwmrc...${CNC}"
+        if ! grep -q 's6-svscan' "$bspwmrc"; then
+            printf "%b\n" "${BLD}${CYE}Adding s6-svscan to bspwmrc...${CNC}"
             {
-                printf "\n# Start mpd as user on login (Artix/s6)\n"
-                printf "pgrep -x mpd >/dev/null || mpd --no-daemon &\n"
+                printf "\n# Start s6 user services\n"
+                printf "if command -v s6-svscan >/dev/null 2>&1; then\n"
+                printf "    pgrep -x s6-svscan >/dev/null || s6-svscan \"\$HOME/.s6/sv\" &\n"
+                printf "fi\n"
             } >> "$bspwmrc"
         fi
     fi
-    lx_autostart="$HOME/.config/lxsession/LXDE/autostart"
-    if [ -f "$lx_autostart" ]; then
-        if ! grep -q 'mpd --no-daemon' "$lx_autostart"; then
-            printf "%b\n" "${BLD}${CYE}Adding mpd autostart to lxsession...${CNC}"
-            printf "@mpd --no-daemon\n" >> "$lx_autostart"
-        fi
-    fi
-    printf "%b\n" "${BLD}${CGR}MPD configured to start in your session.${CNC}"
 
     # ArchUpdates periodic check: prefer cron (cronie)
     if command -v crontab >/dev/null 2>&1; then
@@ -891,7 +914,12 @@ final_prompt() {
         case "$yn" in
             [Yy]) printf "\n%b\n" "${BLD}${CGR}Initiating reboot...${CNC}"
                 sleep 1
-                sudo reboot
+                # Use s6-reboot if available, otherwise fall back to sudo reboot
+                if command -v s6-reboot >/dev/null 2>&1; then
+                    sudo s6-reboot
+                else
+                    sudo reboot
+                fi
                 break ;;
             [Nn]|"") printf "\n%b\n\n" "${BLD}${CYE}Remember to reboot later to apply all changes.${CNC}"
                     break ;;
