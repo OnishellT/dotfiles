@@ -9,7 +9,7 @@
 #  Author    -   gh0stzk (adapted for Artix s6 by ChatGPT)
 #  Repo      -   https://github.com/gh0stzk/dotfiles
 #  Last updated - 2025-08-29
-#
+#  https://chatgpt.com/share/68b225c2-a2ac-8002-9295-bb70c7649633 
 #  RiceInstaller (Artix s6) - installs dotfiles with s6/66-friendly behavior
 #
 #  Differences vs original:
